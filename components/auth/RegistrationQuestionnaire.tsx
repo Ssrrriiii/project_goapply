@@ -10,6 +10,7 @@ import { Slider } from "@/components/ui/slider"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import { FIELD_OF_STUDY_OPTIONS, NATIONALITY_OPTIONS, UserProfile } from "@/models/user"
+import { useAuth } from "@/contexts/AuthContext"
 
 interface RegistrationQuestionnaireProps {
   isOpen: boolean
@@ -30,15 +31,44 @@ export default function RegistrationQuestionnaire({
 }: RegistrationQuestionnaireProps) {
   const [currentStep, setCurrentStep] = useState(initialStep)
   const [profileData, setProfileData] = useState<Partial<UserProfile>>({})
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  
+  const { getQuestionnaireProgress, saveQuestionnaireStep, completeQuestionnaire } = useAuth()
 
   const backgroundImage = currentStep >= 4 ? '/australia.jpg' : '/Landscape.jpg'
   const progress = (currentStep / totalSteps) * 100
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (currentStep < totalSteps) {
-      setCurrentStep(currentStep + 1)
+      try {
+        setLoading(true)
+        setError(null)
+        
+        // Save current step data to backend
+        await saveQuestionnaireStep(currentStep, profileData)
+        
+        setCurrentStep(currentStep + 1)
+      } catch (error: any) {
+        console.error('Error saving step:', error)
+        setError(error.message || 'Failed to save progress')
+      } finally {
+        setLoading(false)
+      }
     } else {
-      onComplete(profileData)
+      try {
+        setLoading(true)
+        setError(null)
+        
+        // Complete the questionnaire
+        await completeQuestionnaire(profileData)
+        onComplete(profileData)
+      } catch (error: any) {
+        console.error('Error completing questionnaire:', error)
+        setError(error.message || 'Failed to complete questionnaire')
+      } finally {
+        setLoading(false)
+      }
     }
   }
 
@@ -63,17 +93,33 @@ export default function RegistrationQuestionnaire({
     }))
   }
 
-  // Load saved progress if resuming
+  // Load saved progress from backend
   useEffect(() => {
-    if (isOpen && initialStep > 1) {
-      const savedProfile = localStorage.getItem('tempProfile')
-      if (savedProfile) {
-        setProfileData(JSON.parse(savedProfile))
+    const loadProgress = async () => {
+      if (isOpen) {
+        try {
+          const progressData = await getQuestionnaireProgress()
+          if (progressData.profile) {
+            setProfileData(progressData.profile)
+          }
+          if (progressData.currentStep && initialStep === 1) {
+            setCurrentStep(progressData.currentStep)
+          }
+        } catch (error) {
+          console.error('Error loading progress:', error)
+          // Fallback to localStorage if backend fails
+          const savedProfile = localStorage.getItem('tempProfile')
+          if (savedProfile) {
+            setProfileData(JSON.parse(savedProfile))
+          }
+        }
       }
     }
-  }, [isOpen, initialStep])
 
-  // Save progress as user fills out the form
+    loadProgress()
+  }, [isOpen, initialStep, getQuestionnaireProgress])
+
+  // Save progress to localStorage as backup (in case backend is unavailable)
   useEffect(() => {
     if (Object.keys(profileData).length > 0) {
       localStorage.setItem('tempProfile', JSON.stringify(profileData))
@@ -544,6 +590,13 @@ export default function RegistrationQuestionnaire({
             {renderQuestion()}
           </AnimatePresence>
 
+          {/* Error display */}
+          {error && (
+            <div className="mt-4 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
+              <p className="text-destructive text-sm">{error}</p>
+            </div>
+          )}
+
           {/* Navigation */}
           <div className="flex justify-between items-center mt-8">
             <Button
@@ -562,10 +615,11 @@ export default function RegistrationQuestionnaire({
 
             <Button
               onClick={handleNext}
+              disabled={loading}
               className="bg-primary hover:bg-primary/90 text-primary-foreground"
             >
-              {currentStep === totalSteps ? 'Complete' : 'Next'}
-              {currentStep !== totalSteps && <ChevronRight className="w-4 h-4 ml-2" />}
+              {loading ? 'Saving...' : currentStep === totalSteps ? 'Complete' : 'Next'}
+              {!loading && currentStep !== totalSteps && <ChevronRight className="w-4 h-4 ml-2" />}
             </Button>
           </div>
         </motion.div>

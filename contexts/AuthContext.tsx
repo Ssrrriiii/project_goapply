@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 import { User, UserProfile } from '@/models/user'
+import apiService from '@/lib/api'
 
 interface AuthContextType {
   user: User | null
@@ -13,6 +14,10 @@ interface AuthContextType {
   signOut: () => void
   updateProfile: (profileData: Partial<UserProfile>) => Promise<void>
   resumeRegistration: () => number // Returns step to resume from
+  // Questionnaire methods
+  getQuestionnaireProgress: () => Promise<{ currentStep: number; completedSteps: number[]; profile: any }>
+  saveQuestionnaireStep: (step: number, data: any) => Promise<void>
+  completeQuestionnaire: (profileData: any) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -26,18 +31,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Check for existing session on mount
     const checkSession = async () => {
       try {
-        // This would typically check localStorage/sessionStorage or make an API call
-        const savedUser = localStorage.getItem('user')
-        const savedProfile = localStorage.getItem('profile')
-        
-        if (savedUser) {
-          setUser(JSON.parse(savedUser))
-        }
-        if (savedProfile) {
-          setProfile(JSON.parse(savedProfile))
+        const token = apiService.getToken()
+        if (token) {
+          // Verify token and get user profile
+          const response = await apiService.getProfile()
+          if (response.success && response.user) {
+            setUser(response.user)
+            if (response.data?.profile) {
+              setProfile(response.data.profile)
+            }
+          } else {
+            // Token is invalid, remove it
+            apiService.removeToken()
+          }
         }
       } catch (error) {
         console.error('Error checking session:', error)
+        apiService.removeToken()
       } finally {
         setIsLoading(false)
       }
@@ -49,36 +59,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = async (email: string, password: string) => {
     setIsLoading(true)
     try {
-      // Check if user exists in localStorage from previous registration
-      const existingUsers = localStorage.getItem('registeredUsers')
-      let userData: User | null = null
+      const response = await apiService.login({ email, password })
       
-      if (existingUsers) {
-        const users = JSON.parse(existingUsers)
-        userData = users.find((u: User) => u.email === email)
-      }
-      
-      // If no user found, create a demo user with the email
-      if (!userData) {
-        userData = {
-          id: '1',
-          email,
-          firstName: 'John',
-          lastName: 'Doe',
-          profileCompleted: true,
-          registrationStep: 8,
-          createdAt: new Date(),
-          updatedAt: new Date()
+      if (response.success && response.token && response.user) {
+        // Store token and user data
+        apiService.setToken(response.token)
+        setUser(response.user)
+        
+        // Get user profile if available
+        if (response.data?.profile) {
+          setProfile(response.data.profile)
         }
-      }
-      
-      setUser(userData)
-      localStorage.setItem('user', JSON.stringify(userData))
-      
-      // Also load their profile if it exists
-      const savedProfile = localStorage.getItem(`profile_${userData.id}`)
-      if (savedProfile) {
-        setProfile(JSON.parse(savedProfile))
+      } else {
+        throw new Error(response.error || 'Login failed')
       }
     } catch (error) {
       console.error('Sign in error:', error)
@@ -91,26 +84,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signUp = async (userData: { email: string; password: string; firstName: string; lastName: string }) => {
     setIsLoading(true)
     try {
-      const newUser: User = {
-        id: Date.now().toString(),
-        email: userData.email,
-        firstName: userData.firstName,
-        lastName: userData.lastName,
-        profileCompleted: false,
-        registrationStep: 0,
-        createdAt: new Date(),
-        updatedAt: new Date()
+      const response = await apiService.register(userData)
+      
+      if (response.success && response.token && response.user) {
+        // Store token and user data
+        apiService.setToken(response.token)
+        setUser(response.user)
+        
+        // Create a basic profile structure for the new user
+        const newProfile: UserProfile = {
+          userId: response.user.id,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        }
+        setProfile(newProfile)
+      } else {
+        throw new Error(response.error || 'Registration failed')
       }
-      
-      // Store user in both current session and registered users list
-      setUser(newUser)
-      localStorage.setItem('user', JSON.stringify(newUser))
-      
-      // Keep track of all registered users
-      const existingUsers = localStorage.getItem('registeredUsers')
-      const users = existingUsers ? JSON.parse(existingUsers) : []
-      users.push(newUser)
-      localStorage.setItem('registeredUsers', JSON.stringify(users))
     } catch (error) {
       console.error('Sign up error:', error)
       throw error
@@ -122,48 +112,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = () => {
     setUser(null)
     setProfile(null)
-    localStorage.removeItem('user')
-    localStorage.removeItem('profile')
+    apiService.removeToken()
   }
 
   const updateProfile = async (profileData: Partial<UserProfile>) => {
     if (!user) return
 
     try {
-      const updatedProfile: UserProfile = {
-        userId: user.id,
-        ...profile,
-        ...profileData,
-        updatedAt: new Date(),
-        createdAt: profile?.createdAt || new Date()
-      }
+      const response = await apiService.updateProfile(profileData)
       
-      // Update user data if firstName or lastName are provided
-      const updatedUser: User = {
-        ...user,
-        firstName: (profileData as any).firstName || user.firstName,
-        lastName: (profileData as any).lastName || user.lastName,
-        profileCompleted: true,
-        registrationStep: 8,
-        updatedAt: new Date()
-      }
-
-      setProfile(updatedProfile)
-      setUser(updatedUser)
-      
-      // Store profile with user-specific key
-      localStorage.setItem(`profile_${user.id}`, JSON.stringify(updatedProfile))
-      localStorage.setItem('user', JSON.stringify(updatedUser))
-      
-      // Update in registered users list
-      const existingUsers = localStorage.getItem('registeredUsers')
-      if (existingUsers) {
-        const users = JSON.parse(existingUsers)
-        const userIndex = users.findIndex((u: User) => u.id === user.id)
-        if (userIndex !== -1) {
-          users[userIndex] = updatedUser
-          localStorage.setItem('registeredUsers', JSON.stringify(users))
+      if (response.success) {
+        const updatedProfile: UserProfile = {
+          userId: user.id,
+          ...profile,
+          ...profileData,
+          updatedAt: new Date(),
+          createdAt: profile?.createdAt || new Date()
         }
+        
+        setProfile(updatedProfile)
+      } else {
+        throw new Error(response.error || 'Profile update failed')
       }
     } catch (error) {
       console.error('Profile update error:', error)
@@ -175,6 +144,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return user?.registrationStep || 1
   }
 
+  // Questionnaire methods
+  const getQuestionnaireProgress = async () => {
+    try {
+      const response = await apiService.getQuestionnaireProgress()
+      if (response.success) {
+        return {
+          currentStep: response.data?.currentStep || 1,
+          completedSteps: response.data?.completedSteps || [],
+          profile: response.data?.profile
+        }
+      }
+      throw new Error(response.error || 'Failed to get questionnaire progress')
+    } catch (error) {
+      console.error('Get questionnaire progress error:', error)
+      throw error
+    }
+  }
+
+  const saveQuestionnaireStep = async (step: number, data: any) => {
+    try {
+      const response = await apiService.saveQuestionnaireStep(step, data)
+      if (response.success) {
+        // Update local profile state
+        if (response.data?.profile) {
+          setProfile(response.data.profile)
+        }
+      } else {
+        throw new Error(response.error || 'Failed to save questionnaire step')
+      }
+    } catch (error) {
+      console.error('Save questionnaire step error:', error)
+      throw error
+    }
+  }
+
+  const completeQuestionnaire = async (profileData: any) => {
+    try {
+      const response = await apiService.completeQuestionnaire(profileData)
+      if (response.success) {
+        // Update local profile state
+        if (response.data?.profile) {
+          setProfile(response.data.profile)
+        }
+      } else {
+        throw new Error(response.error || 'Failed to complete questionnaire')
+      }
+    } catch (error) {
+      console.error('Complete questionnaire error:', error)
+      throw error
+    }
+  }
+
   const value = {
     user,
     profile,
@@ -184,7 +205,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signUp,
     signOut,
     updateProfile,
-    resumeRegistration
+    resumeRegistration,
+    getQuestionnaireProgress,
+    saveQuestionnaireStep,
+    completeQuestionnaire
   }
 
   return (

@@ -38,9 +38,23 @@ export default function SignInModal({ isOpen, onClose, onSwitchToRegister }: Sig
       await signIn(formData.email, formData.password)
       onClose()
       router.push('/dashboard')
-    } catch (err) {
-      setError("Invalid email or password")
+    } catch (err: any) {
       console.error('Sign in error:', err)
+      
+      // Handle specific error messages from backend
+      let errorMessage = "Invalid email or password"
+      
+      if (err.message) {
+        if (err.message.includes('Invalid credentials')) {
+          errorMessage = "Invalid email or password"
+        } else if (err.message.includes('Please provide email and password')) {
+          errorMessage = "Please enter both email and password"
+        } else {
+          errorMessage = err.message
+        }
+      }
+      
+      setError(errorMessage)
     } finally {
       setLoading(false)
     }

@@ -53,8 +53,8 @@ export default function RegisterModal({
     }
     if (!formData.password) {
       newErrors.password = 'Password is required'
-    } else if (formData.password.length < 8) {
-      newErrors.password = 'Password must be at least 8 characters'
+    } else if (formData.password.length < 6) {
+      newErrors.password = 'Password must be at least 6 characters'
     }
     if (formData.password !== formData.confirmPassword) {
       newErrors.confirmPassword = 'Passwords do not match'
@@ -69,6 +69,8 @@ export default function RegisterModal({
     
     if (validateForm()) {
       setLoading(true)
+      setErrors({}) // Clear previous errors
+      
       try {
         await signUp({
           email: formData.email,
@@ -77,15 +79,34 @@ export default function RegisterModal({
           lastName: formData.lastName
         })
         
+        // Registration successful, proceed to questionnaire
         onCompleteInitialRegister({
           email: formData.email,
           password: formData.password,
           firstName: formData.firstName,
           lastName: formData.lastName
         })
-      } catch (error) {
+      } catch (error: any) {
         console.error('Registration error:', error)
-        setErrors({ general: 'Registration failed. Please try again.' })
+        
+        // Handle specific error messages from backend
+        let errorMessage = 'Registration failed. Please try again.'
+        
+        if (error.message) {
+          if (error.message.includes('User already exists')) {
+            errorMessage = 'An account with this email already exists. Please try signing in instead.'
+          } else if (error.message.includes('Please provide all required fields')) {
+            errorMessage = 'Please fill in all required fields.'
+          } else if (error.message.includes('Password must be at least 6 characters')) {
+            errorMessage = 'Password must be at least 6 characters long.'
+          } else if (error.message.includes('Please provide a valid email')) {
+            errorMessage = 'Please enter a valid email address.'
+          } else {
+            errorMessage = error.message
+          }
+        }
+        
+        setErrors({ general: errorMessage })
       } finally {
         setLoading(false)
       }
